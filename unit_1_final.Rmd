@@ -1,0 +1,321 @@
+---
+title: "Unit 1 Final Assignment"
+author: "Yifan Liu"
+date: "2020/10/13"
+output: html_document
+---
+
+```{r setup, include=FALSE, warning=FALSE, message=FALSE}
+library(knitr)
+library(tidyverse)
+library(magrittr)
+library(kableExtra)
+library(citation)
+
+opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+```
+
+# Exploratory data analysis into the chemicals being applied to blueberries
+
+## Acquire and read the data
+
+These data were collected from the National Agricultural Statistics Service, which is the statistical branch of the U.S. Department of Agriculture. According to its website, NASS conducts hundreds of surveys and issues nearly 500 national reports each year on issues like agricultural production, economics, demographics, and the environment. The data were collected from the USDA database selector: <a href="https://quickstats.nass.usda.gov">https://quickstats.nass.usda.gov</a> which were mainly about the information about berries. 
+
+The data were <a href="https://quickstats.nass.usda.gov/results/D416E96E-3D5C-324C-9334-1D38DF88FFF1">stored online</a> and then downloaded as a CSV file.
+
+```{r}
+
+## read the data
+
+ag_data <- read_csv("berries.csv", col_names = TRUE)
+
+## look at number of unique values in each column
+ag_data %>% summarize_all(n_distinct) -> aa
+
+
+## make a list of the columns with only one unique value
+bb <- which(aa[1,]==1)
+
+## list the 1-unique value column names 
+cn <- colnames(ag_data)[bb]
+
+```
+
+The berries data only had 8 out of 21 columns containing meaningful data. Thus further data cleaning methods are required. Below is a preview of the first parts of the original data. 
+
+```{r}
+## remove the 1-unique columns from the dataset
+ag_data %<>% select(-all_of(bb))
+
+aa %<>% select(-all_of(bb)) 
+
+
+## State name and the State ANSI code are (sort of) redundant
+## Just keep the name
+ag_data %<>% select(-4)
+aa %<>% select(-4) 
+
+
+kable(head(ag_data)) %>%
+  kable_styling(font_size=12)
+
+```
+After examining the commodities in the dataset, there are three types of berries: blueberries, raspberries, and strawberries. In this analysis, only the blueberries are focused and only the `Year` time period will be considered. 
+
+## Data Cleaning and Organization
+
+### Method
+*
+First filter out a dataset names `bberry` which contains all the blueberries data from the original dataset. Then separate the `Data Item` column into several different columns so that further cleaning process can be conducted. 
+
+```{r}
+bberry <- ag_data %>% filter((Commodity=="BLUEBERRIES") & (Period=="YEAR"))
+bberry %<>% select(-c(Period, Commodity))   
+
+bberry %<>% separate(`Data Item`, c("B","type", "meas", "what"), sep = ",") 
+bberry %<>% select(-B)
+
+bberry %<>% separate(type,c("b1", "type", "b2", "lab1", "lab2"), " ")
+
+bberry %<>% select(-c(b1,b2)) 
+
+bberry[is.na(bberry)] <- " " 
+```
+
+*
+Similarly, separate the `Domain` and the `Domain Category` columns for further cleaning process.
+
+```{r}
+
+bberry %<>% separate(Domain, c("D_left", "D_right"), sep = ", ")
+
+bberry[is.na(bberry)] <- " "
+
+bberry %<>% separate(`Domain Category`, c("DC_left", "DC_right"), sep = ", ")
+
+bberry %<>% separate(DC_left, c("DC_left_l", "DC_left_r"), sep = ": ")
+
+bberry %<>% separate(DC_right, c("DC_right_l", "DC_right_r"), sep = ": ") 
+
+bberry[is.na(bberry)] <- " "
+
+```
+
+*
+The next step is to find and remove the redundant columns. 
+
+```{r}
+bberry %<>%  select(-DC_left_l) 
+
+bberry %<>% select(-DC_right_l)
+
+bberry %<>% mutate(label = paste(lab1,lab2)) 
+
+bberry %<>% mutate(D_left = "CHEMICAL", D_left = "") 
+
+bberry %<>% mutate(Chemical=paste(D_left, D_right)) 
+
+bberry %<>% select(-c(D_left, D_right)) 
+
+bberry %<>% select(Year, State, type, what, meas, label, DC_left_r, DC_right_r, Chemical, Value )
+
+```
+
+*
+Then the `what` and the `means` columns need to be cleaned and re-organized. The objective is to put these two columns all in the same column. In order to do so, separation is needed first and then test to make sure there are no overlaps. 
+
+```{r}
+## Create a simple function that takes a logical variable and a second variable.  It returns the second variable if the logical variable is true and returns a blank if it is false
+
+f1 <- function(a,b){
+  if(a){
+    return(b)
+  }else{
+      return("")
+  }
+}
+
+index_meas <- str_detect(bberry$meas, "MEASURED IN")
+
+new <- map2(index_meas, bberry$meas, f1)
+new <- unlist(new)
+
+bberry %<>% mutate(m_in_1 = unlist(map2(index_meas, bberry$meas, f1))) 
+
+bberry %<>% mutate(meas = str_replace(bberry$meas, "MEASURED IN.*$", ""))
+
+index_what <- str_detect(bberry$what, "MEASURED IN")
+
+bberry %<>% mutate(m_in_2 = unlist(map2(index_what, bberry$what, f1))) 
+
+bberry %<>% mutate(what = str_replace(bberry$what, "MEASURED IN.*$", ""))
+
+### Check for overlaps
+
+bberry %<>% mutate(units = str_trim(paste(m_in_1, m_in_2))) 
+```
+
+*
+Finally rename the columns of the dataset and select those that are required in this analysis.
+
+```{r}
+
+bberry %<>% rename(Avg = what, Marketing = meas, Harvest = label, Chem_family = DC_left_r, Materials = DC_right_r, Measures = units)
+
+bberry %<>% mutate(production = str_trim(paste(Marketing, Harvest)))
+
+bberry %<>% mutate(Chemical = str_trim(paste(Chem_family, Chemical)))
+
+bberry %<>% select(Year, State, type, production, Avg, Measures, Materials, Chemical, Value)
+```
+
+### Preview of the data
+
+Below are the column names of the cleaned dataset for blue berries. 
+```{r}
+colnames(bberry)
+```
+Below is the preview of the cleaned dataset for blue berries. 
+```{r}
+kable(head(bberry, n=10)) %>% kable_styling(font_size=12)
+```
+## Visualizations
+
+Suppose we want to explore the chemicals being applied to blueberries. First we need to filter out the related dataset named `unfood_1`. 
+
+```{r}
+unfood <- bberry %<>% filter(production=="APPLICATIONS") 
+
+unfood %<>% filter(Value != "(D)")
+
+unfood %<>% filter(Value !=  "(NA)")
+
+unfood %<>% filter(Measures == "MEASURED IN LB / ACRE / APPLICATION")
+
+unfood_1 <- unfood %>%  select(Year, State, Chemical, Value)
+
+unfood_1$Value = as.numeric(unfood_1$Value)
+```
+
+Below is a basic summary of the data.
+
+```{r}
+summary(unfood_1)
+```
+
+We first create a box plot of chemical values being applied to blueberries according to state. 
+
+```{r}
+
+# box plot of chemical values according to state
+bp1 <- ggplot(unfood_1, aes(x = State, y = Value))
+bp1 <- bp1 + geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),
+        axis.text = element_text(size = 11),
+        axis.title = element_text(size = 13, face = "bold")) +
+  labs(x = "State")
+bp1
+```
+
+According to the box plot, we can easily tell that there are a large number of outliers for each state. Thus we try to create another one without the outliers for visualizing the distribution of each state. 
+
+```{r}
+
+# excluding outliers
+bp2 <- ggplot(unfood_1, aes(x = State, y = Value))
+bp2 <- bp2 + geom_boxplot(outlier.colour = NA) +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),
+        axis.text = element_text(size = 11),
+        axis.title = element_text(size = 13, face = "bold")) +
+  coord_cartesian(ylim = c(0, 4)) +
+  labs(x = "State")
+bp2
+```
+
+We can repeat the same procedure to visualize the distributions of chemicals being applied to blueberries according to different types of chemical. 
+
+```{r}
+
+# box plot of chemical values according to types of chemical
+bp3 <- ggplot(unfood_1, aes(x = Chemical, y = Value))
+bp3 <- bp3 + geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),
+        axis.text = element_text(size = 11),
+        axis.title = element_text(size = 13, face = "bold")) +
+  labs(x = "Chemical")
+bp3
+```
+
+According to the box plot we can discover that there appears to have two different groups of chemicals with extremely different ranges of values. Thus we can divide our `unfood_1` dataset into two sets according to there two different groups of chemicals and then plot. 
+
+```{r}
+unfood_2 = filter(unfood_1, Chemical == c("FUNGICIDE", "HERBICIDE", "INSECTICIDE", "OTHER"))
+
+unfood_3 = filter(unfood_1, Chemical == c("(NITROGEN)", "(PHOSPHATE)", "(POTASH)", "(SULFUR)"))
+```
+
+```{r}
+# box plot of chemical values according to group one chemical
+bp4 <- ggplot(unfood_2, aes(x = Chemical, y = Value))
+bp4<- bp4 + geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),
+        axis.text = element_text(size = 11),
+        axis.title = element_text(size = 13, face = "bold")) +
+  labs(x = "Chemical")
+
+# box plot of chemical values according to group two chemical
+bp5 <- ggplot(unfood_3, aes(x = Chemical, y = Value))
+bp5 <- bp5 + geom_boxplot() +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1),
+        axis.text = element_text(size = 11),
+        axis.title = element_text(size = 13, face = "bold")) +
+  labs(x = "Chemical")
+
+gridExtra::grid.arrange(bp4, bp5, ncol = 2)
+```
+
+
+Then we can create a histogram to see the least and most variance chemicals. According to the histogram, we can see that nearly 300 out of 552 brands of blueberries have values of chemicals below 0.5. However, there is still a wide distribution of the values of chemicals contained by selected blueberries due to the varieties of chemicals which require further analysis. 
+
+```{r}
+# histogram of least and most variance chemicals
+h1 <- ggplot(unfood_1, aes(unfood_1$Value))
+h1 <- h1 + geom_histogram(breaks = seq(0, 50, by = .5), col = "black", fill = "light blue") +
+  xlim(c(0, 50)) +
+  ylim(c(0, 300)) +
+  theme(axis.text = element_text(size = 11),
+        axis.title = element_text(size = 13, face = "bold")) +
+  labs(x = "Value")
+print(h1)
+```
+
+## Conclusion
+
+After the basic exploratory data analysis, we could come out with these conclusions:
+
+*
+The original data is messy and contains numerous NA values which make it inappropriate for data analysis. Thus data cleaning is a necessary step in this situation. 
+*
+Even after data cleaning, there are still many outliers exist which require further analysis before doing any advanced cleaning steps.
+*
+From the plot of chemical values according to state, we can tell that it appears New Jersey has the most various chemical values while Washington has the least various chemical values.
+*
+From the plot of chemical values according to types of chemicals, we can tell that it appears there are two different groups measured chemicals which need to be treated separately in further analysis. 
+*
+From the histogram of chemical values, we can tell that it appears most (nearly 300 out of 552) brands of blueberries contain chemical values below 0.5. 
+
+
+## Citation
+*
+David Morison (2017) Exploratory data analysis into the relationship between different types of crime in London. Available at: https://towardsdatascience.com/exploratory-data-analysis-into-the-relationship-between-different-types-of-crime-in-london-20c328e193ff (Accessed: 15 Oct 2020).
+*
+United States Department of Agriculture National Agricultural Statistics Service (n.p.) Quick Stats. Available at: https://quickstats.nass.usda.gov/results/D416E96E-3D5C-324C-9334-1D38DF88FFF1 (Accessed: 15 Oct 2020).
+
+```{r}
+package2zenodo("knitr")
+package2zenodo("tidyverse")
+package2zenodo("kableExtra")
+package2zenodo("citation")
+```
+
+
